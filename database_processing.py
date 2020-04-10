@@ -4,32 +4,14 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer
 category_indices = {}
 
-def prep_df(csv_files, var_handler, subsample = 1):
-    var_dict = var_handler.var_dict
-    frame_info = construct_frames(csv_files, [item for sublist in var_dict.values() for item in sublist], subsample)
-    frame, lengths = frame_info[0], frame_info[1]
-    frame = add_class_label(frame, lengths)
-    frame = handle_df(frame, var_handler)
+def prep_df(frame, var_dict):
+    frame = handle_df(frame, var_dict)
     frame = frame.reset_index(drop=True)
     return frame
 
-def construct_frames(csv_names, variables, subsample):
-    lengths = []
-    full_df = pd.read_csv(csv_names[0], sep=',', low_memory=False, usecols = variables, thousands='.')
-    full_df = full_df[:int(subsample*len(full_df))]
-    lengths.append(len(full_df)-1)  # -1 omdat de eerste row een 2e header is
-    for csv_name in csv_names[1:]:
-        csv_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols = variables, thousands='.')
-        csv_df = csv_df[:int(subsample * len(csv_df))]
-        lengths.append(len(csv_df)-1)  # -1 omdat de eerste row een 2e header is
-        full_df = pd.concat([full_df, csv_df])
-    full_df = full_df.drop([0])
-    return [full_df, lengths]
-
-def handle_df(df, var_handler):
+def handle_df(df, var_dict):
     df = df.applymap(lambda x: x.split('|') if type(x) == str else x)
-
-    var_dict = var_handler.var_dict
+    
     for cat_values in var_dict.values():
         for val in cat_values:
             if val not in var_dict["categorical_vars"]:
@@ -42,16 +24,9 @@ def handle_df(df, var_handler):
     df = handle_variables(df) # na numeric handling omdat preprocessing nodig is.
     return df
 
-def preprocess_df(df, var_handler, url_dict, morph_categorical=True, threshold =20, augment = True):
-    var_dict = var_handler.var_dict
-    added_vars = var_handler.added_vars
-    if augment:
-        df, var_handler = augment_variables(df, var_handler, url_dict)
-    else:
-        df = df.drop(var_dict["special_vars"] + var_dict["bool_datetimes"], axis=1)
-    unfilled_df = df.copy(deep=True)
-
-    df = fill_variables(df, var_handler)
+def preprocess_df(df, var_dict, url_dict, needed_columns):
+    df, var_dict = augment_variables(df, var_dict, url_dict)
+    df = fill_variables(df, var_dict)
 
     modified_df = df
     for category in var_dict["categorical_vars"]+ added_vars["categorical_vars"]:
@@ -144,38 +119,36 @@ def other_morph(frame, col_var, thresh):
 ####################################################################################################
 #### Augmentations
 ##################################################################################################
-def augment_variables(frame, var_handler, url_dict):
-    added_var_dict = var_handler.added_vars
+def augment_variables(frame, var_dict, url_dict):
 
     frame["Visit_part_of_day"] = time_of_day(frame["visit_time"])
-    added_var_dict["categorical_vars"].append("Visit_part_of_day")
+    var_dict["categorical_vars"].append("Visit_part_of_day")
 
-    for var in var_handler.var_dict["bool_datetimes"]:
+    for var in var_dict["bool_datetimes"]:
         na_cols = frame[var].isna()
         na_cols = na_cols.map(lambda x: 1 if x==False else 0)
         frame[var] = na_cols
-        added_var_dict["numeric_vars_zero_fill"].append("bool "+var)
+        var_dict["numeric_vars_zero_fill"].append("bool "+var)
         frame = frame.rename(columns = {var : "bool "+var})
 
     frame["has_partner"] = pd.to_numeric(has_partner(frame))
-    added_var_dict["numeric_vars_mean_fill"].append("has_partner")
+    var_dict["numeric_vars_mean_fill"].append("has_partner")
     frame["max_income"], frame["total_income"] = pd.to_numeric(income_augments(frame)[0]), pd.to_numeric(income_augments(frame)[1])
-    added_var_dict["numeric_vars_mean_fill"].append("max_income")
-    added_var_dict["numeric_vars_mean_fill"].append("total_income")
+    var_dict["numeric_vars_mean_fill"].append("max_income")
+    var_dict["numeric_vars_mean_fill"].append("total_income")
 
-    frame, var_handler = is_weekend(frame, ["firstvisit", "lastvisit"], var_handler)
-    frame, var_handler = morph_zip(frame, var_handler)
-    frame, var_handler = morph_city(frame, var_handler)
-    frame, var_handler = search_keywords(frame, var_handler)
-    frame, var_handler = url_keywords(frame, var_handler)
-    subframe, var_handler = transform_urls(frame["url-name"], var_handler, url_dict)
+    frame, var_dict = is_weekend(frame, ["firstvisit", "lastvisit"], var_dict)
+    frame, var_dict = morph_zip(frame, var_handler)
+    frame, var_dict = morph_city(frame, var_handler)
+    frame, var_dict = search_keywords(frame, var_handler)
+    frame, var_dict = url_keywords(frame, var_handler)
+    subframe, var_dict = transform_urls(frame["url-name"], var_dict, url_dict)
     frame = pd.concat([frame, subframe], axis=1)
-    return [frame, var_handler]
+    return [frame, var_dict]
 
 
 
-def morph_zip(df, var_handler):
-    added_var_dict = var_handler.added_vars
+def morph_zip(df, var_dict):
     zip_df = pd.read_csv("zipcode_final.csv") #, usecols=["Postcode", "Bevolking", "Inkomen", "Gemiddelde_leeftijd"])
     #zip_df.columns = ["zip_code", "population", "income", "avg_age"]
     zip_df["Postcode"] = zip_df["Postcode"].astype(int)
@@ -201,10 +174,10 @@ def morph_zip(df, var_handler):
     zip_df.columns = ["zip_code " + x for x in zip_df.columns]  # niet vergeten
     for column in zip_df.columns:
         if column not in ["zip_code Postcode", "zip_code income_population_segment"]: #alle numeric waardes
-            added_var_dict["numeric_vars_mean_fill"].append(column)
+            var_dict["numeric_vars_mean_fill"].append(column)
             zip_df[column] = pd.to_numeric(zip_df[column])
         elif column!= "zip_code Postcode":
-            added_var_dict["categorical_vars"].append(column)
+            var_dict["categorical_vars"].append(column)
 
     df["geo_zipcode"] = df["geo_zipcode"].apply(lambda x: int(x) if re.match(r"^[0-9]{4,5}$", str(x)) else None) # pakt de eerste, moet nog average fixen
     merged = df.merge(zip_df, left_on="geo_zipcode", right_on="zip_code Postcode", how="left")  # zip_code zip_code as it has been transformed
@@ -212,7 +185,7 @@ def morph_zip(df, var_handler):
     df = merged.drop(["geo_zipcode", "zip_code Postcode"], axis=1)
     return [df, var_handler]
 
-def morph_city(frame, var_handler):
+def morph_city(frame, var_dict):
     gemeente_steden = pd.read_csv("Gemeente_per_woonplaats.csv", delimiter=";", decimal=",")
     gemeente_stad_dict = dict(zip(gemeente_steden["Stad"], gemeente_steden["Gemeente"]))
     steden = frame["mr_geo_city_name"]
@@ -225,20 +198,20 @@ def morph_city(frame, var_handler):
 
     merged["Gemeente :Inkomen"] = merged["Gemeente :Inkomen"].map(lambda x: x.replace(',', '.') if isinstance(x, str) and re.search(r".+,.+",x) else None)
     merged["Gemeente :Inkomen"] = pd.to_numeric(merged["Gemeente :Inkomen"])
-    var_handler.added_vars["numeric_vars_mean_fill"] += list(merged.columns)
+    var_dict["numeric_vars_mean_fill"] += list(merged.columns)
     frame = frame.drop("mr_geo_city_name", axis=1)
     return [pd.concat([frame, merged], axis=1), var_handler]
 
 import datetime
 
-def is_weekend(df, date_vars, var_handler):
+def is_weekend(df, date_vars, var_dict):
     for date_var in date_vars:
         datetime_series = df[date_var]
         datetime_series = datetime_series.map(lambda x: datetime.datetime.fromtimestamp(int(x)/1e3) if len(x) else None)
         is_weekend_series = datetime_series.map(lambda x: 1 if x.weekday()>4 else 0)
         df[date_var + ' is_weekend'] = is_weekend_series
-        var_handler.added_vars["numeric_vars_mean_fill"].append(date_var + ' is_weekend')
-    return [df, var_handler]
+        var_dict["numeric_vars_mean_fill"].append(date_var + ' is_weekend')
+    return [df, var_dict]
 
 import regex as re
 def time_of_day(visit_time):
@@ -280,7 +253,7 @@ def has_partner(frame):
         c+=1
     return bools
 
-def search_keywords(frame, var_handler): #doet niks, niemand zoekt blijkbaar
+def search_keywords(frame, var_dict): #doet niks, niemand zoekt blijkbaar
     user_searches = frame["keywords"]
     bestaande_woning_keywords = ["oversluiten", "verbouw", 'tweede', "extra", "rentevaste periode",
                                  "pensioen", "rentemiddeling"]
@@ -303,10 +276,10 @@ def search_keywords(frame, var_handler): #doet niks, niemand zoekt blijkbaar
                         volgende_woning_searches[c] += 1
         c+=1
     frame["search bestaande_woning"], frame["search volgende_woning"], frame["search starter"] = bestaande_woning_searches, volgende_woning_searches, starter_searches
-    var_handler.added_vars["numeric_vars_zero_fill"] += ["search bestaande_woning", "search volgende_woning", "search starter"]
-    return [frame, var_handler]
+    var_dict["numeric_vars_zero_fill"] += ["search bestaande_woning", "search volgende_woning", "search starter"]
+    return [frame, var_dict]
 
-def url_keywords(frame, var_handler): #url has been formatted already
+def url_keywords(frame, var_dict): #url has been formatted already
     user_urls = frame["url-name"]
     bestaande_woning_keywords = ["oversluiten", "verbouw", 'tweede', "extra", "rentevaste periode",
                                  "pensioen", "rentemiddeling", "uit elkaar", "scheiden", "hypotheek aanpassen"]
@@ -330,7 +303,7 @@ def url_keywords(frame, var_handler): #url has been formatted already
                         volgende_woning_urls[c] += 1
         c+=1
     frame["url bestaande_woning"], frame["url volgende_woning"], frame["url starter"] = bestaande_woning_urls, volgende_woning_urls, starter_urls
-    var_handler.added_vars["numeric_vars_zero_fill"] += ["search bestaande_woning", "search volgende_woning", "search starter"]
+    var_dict["numeric_vars_zero_fill"] += ["search bestaande_woning", "search volgende_woning", "search starter"]
     return [frame, var_handler]
 
 def income_augments(frame):
@@ -350,7 +323,7 @@ def income_augments(frame):
 #####
 #Clusters
 
-def transform_urls(urls_list, var_handler, url_dict):
+def transform_urls(urls_list, var_dict, url_dict):
     mapped_list = []
     for url_list in urls_list:
         mapped = []
@@ -367,6 +340,6 @@ def transform_urls(urls_list, var_handler, url_dict):
         for index in value_counts.index:
             row = df.loc[x]
             row[index] = value_counts[index]
-    var_handler.added_vars["numeric_vars_zero_fill"] += list(df.columns)
+    var_dict["numeric_vars_zero_fill"] += list(df.columns)
 
     return [df, var_handler]
