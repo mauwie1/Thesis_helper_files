@@ -17,7 +17,7 @@ def handle_df(df, var_dict):
 
     for cat_values in var_dict.values():
         for val in cat_values:
-            if val not in var_dict["categorical_vars"]:
+            if val not in var_dict["categorical_vars"] and val not in var_dict["occurence_counts"]:
                 df[val] = df[val].apply(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
                 if val in var_dict["numeric_vars_mean_fill"] + var_dict["numeric_vars_zero_fill"]:
                     df[val] = df[val].apply(lambda x: x.replace('.', '') if type(x) == str else x)
@@ -33,9 +33,14 @@ def preprocess_df(df, var_dict, url_dict, needed_columns, cat_dict):
     df, var_dict = augment_variables(df, var_dict, url_dict)
 
     df = fill_variables(df, var_dict)
-
     for category in var_dict["categorical_vars"]:
-        df[category] = df[category].map(cat_dict[category])
+        if category in cat_dict.keys():
+            try:
+                df[category] = df[category].map(lambda x: x if x not in cat_dict[category].keys() else cat_dict[category][x])
+            except TypeError:
+                #print(df[category][0:50])
+                df[category] = df[category].map(lambda x: list(map(lambda y: y if y not in cat_dict[category].keys() else cat_dict[category][y], x))) #pfoe, mapt elements van list naar dict
+                #print(df[category][0:50])
         try:
             df[category] = df[category].apply(lambda x: x.split(','))
         except:
@@ -56,7 +61,10 @@ def preprocess_df(df, var_dict, url_dict, needed_columns, cat_dict):
 
 def fill_variables(df, var_dict):
     for val in var_dict["categorical_vars"]: # Dit zet (de meeste) missende categorieen naar de meest voorkomende
-        df[val] = df[val].apply(lambda x: ','.join(x) if type(x) == list else x)
+        try:
+            df[val] = df[val].apply(lambda x: ','.join(x) if type(x) == list else x)
+        except:
+            print("fill "+ val)
         try:
             df[val] = df[val].fillna(df[val].value_counts().index[0])
         except:  # if the variable has zero fill rate
@@ -107,6 +115,10 @@ def augment_variables(frame, var_dict, url_dict):
     frame["Visit_part_of_day"] = time_of_day(frame["visit_time"])
     var_dict["categorical_vars"].append("Visit_part_of_day")
 
+    for var in var_dict["occurence_counts"]:
+        frame[var] = frame[var].fillna(0)
+        frame[var] = frame[var].map(lambda x : len(x) if isinstance(x, list) else x)
+
     for var in var_dict["bool_datetimes"]:
         na_cols = frame[var].isna()
         na_cols = na_cols.map(lambda x: 1 if x == False else 0)
@@ -132,7 +144,7 @@ def augment_variables(frame, var_dict, url_dict):
 
 
 def morph_zip(df, var_dict):
-    zip_df = pd.read_csv("zipcode_final.csv")  # , usecols=["Postcode", "Bevolking", "Inkomen", "Gemiddelde_leeftijd"])
+    zip_df = pd.read_csv(gitlink + "/zipcode_final.csv")  # , usecols=["Postcode", "Bevolking", "Inkomen", "Gemiddelde_leeftijd"])
     # zip_df.columns = ["zip_code", "population", "income", "avg_age"]
     zip_df["Postcode"] = zip_df["Postcode"].astype(int)
     zip_df["Total_income"] = zip_df["Bevolking"] * zip_df["Inkomen"]
@@ -162,22 +174,22 @@ def morph_zip(df, var_dict):
         elif column != "zip_code Postcode":
             var_dict["categorical_vars"].append(column)
 
-    df["geo_zipcode"] = df["geo_zipcode"].apply(
+    df["mr_geo_zipcode"] = df["mr_geo_zipcode"].apply(
         lambda x: int(x) if re.match(r"^[0-9]{4,5}$", str(x)) else None)  # pakt de eerste, moet nog average fixen
-    merged = df.merge(zip_df, left_on="geo_zipcode", right_on="zip_code Postcode",
+    merged = df.merge(zip_df, left_on="mr_geo_zipcode", right_on="zip_code Postcode",
                       how="left")  # zip_code zip_code as it has been transformed
 
-    df = merged.drop(["geo_zipcode", "zip_code Postcode"], axis=1)
+    df = merged.drop(["mr_geo_zipcode", "zip_code Postcode"], axis=1)
     return [df, var_dict]
 
 
 def morph_city(frame, var_dict):
-    gemeente_steden = pd.read_csv("Gemeente_per_woonplaats.csv", delimiter=";", decimal=",")
+    gemeente_steden = pd.read_csv(gitlink + "/Gemeente_per_woonplaats.csv", delimiter=";", decimal=",")
     gemeente_stad_dict = dict(zip(gemeente_steden["Stad"], gemeente_steden["Gemeente"]))
     steden = frame["mr_geo_city_name"]
     gemeentes = pd.DataFrame({"Gemeente": steden.map(gemeente_stad_dict)})
 
-    gemeente_stats = pd.read_csv("Kerncijfers_per_gemeente.csv", delimiter=";", decimal=",")
+    gemeente_stats = pd.read_csv(gitlink + "Kerncijfers_per_gemeente.csv", delimiter=";", decimal=",")
     gemeente_stats.columns = ["Gemeente :" + col for col in gemeente_stats.columns]
     merged = gemeentes.merge(gemeente_stats, left_on="Gemeente", right_on="Gemeente :Gemeente", how="left")
     merged = merged.drop(['Gemeente', "Gemeente :Gemeente"], axis=1)
@@ -197,7 +209,7 @@ def is_weekend(df, date_vars, var_dict):
     for date_var in date_vars:
         datetime_series = df[date_var]
         datetime_series = datetime_series.map(
-            lambda x: datetime.datetime.fromtimestamp(int(x) / 1e3) if len(x) else None)
+            lambda x: datetime.datetime.fromtimestamp(int(x) / 1e3))
         is_weekend_series = datetime_series.map(lambda x: 1 if x.weekday() > 4 else 0)
         df[date_var + ' is_weekend'] = is_weekend_series
         var_dict["numeric_vars_mean_fill"].append(date_var + ' is_weekend')
@@ -258,7 +270,7 @@ def search_keywords(frame, var_dict):  # doet niks, niemand zoekt blijkbaar
         len(user_searches)), np.zeros(len(user_searches))
     c = 0
     for searches in user_searches:  # one can have multiple searches
-        if not isinstance(searches, float):
+        if not isinstance(searches, float) and searches is not None:
             for search in searches:
                 for keyword in starter_keywords:
                     if keyword in search:
@@ -288,7 +300,7 @@ def url_keywords(frame, var_dict):  # url has been formatted already
         len(user_urls)), np.zeros(len(user_urls))
     c = 0
     for urls in user_urls:  # one can have multiple searches
-        if not isinstance(urls, float):
+        if not isinstance(urls, float) and urls is not None:
             for url in urls:
                 for keyword in starter_keywords:
                     if keyword in url:
