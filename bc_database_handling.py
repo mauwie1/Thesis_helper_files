@@ -17,7 +17,7 @@ def handle_df(df, var_dict):
 
     for cat_values in var_dict.values():
         for val in cat_values:
-            if val not in var_dict["categorical_vars"]:
+            if val not in var_dict["categorical_vars"] and val not in var_dict["occurence_counts"]:
                 df[val] = df[val].apply(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
                 if val in var_dict["numeric_vars_mean_fill"] + var_dict["numeric_vars_zero_fill"]:
                     df[val] = df[val].apply(lambda x: x.replace('.', '') if type(x) == str else x)
