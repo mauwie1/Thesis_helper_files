@@ -171,8 +171,11 @@ def morph_zip(df, var_dict):
 
     df["mr_geo_zipcode"] = df["mr_geo_zipcode"].apply(
         lambda x: int(x) if re.match(r"^[0-9]{4,5}$", str(x)) else None)  # pakt de eerste, moet nog average fixen
-    merged = df.merge(zip_df, left_on="mr_geo_zipcode", right_on="zip_code Postcode",
-                      how="left")  # zip_code zip_code as it has been transformed
+    try:
+        merged = df.merge(zip_df, left_on="mr_geo_zipcode", right_on="zip_code Postcode",
+                          how="left")  # zip_code zip_code as it has been transformed
+    except:
+        print("Could not merge zipcodes")
 
     df = merged.drop(["mr_geo_zipcode", "zip_code Postcode"], axis=1)
     return [df, var_dict]
