@@ -174,10 +174,10 @@ def morph_zip(df, var_dict):
     try:
         merged = df.merge(zip_df, left_on="mr_geo_zipcode", right_on="zip_code Postcode",
                           how="left")  # zip_code zip_code as it has been transformed
+        df = merged.drop(["mr_geo_zipcode", "zip_code Postcode"], axis=1)
     except:
         print("Could not merge zipcodes")
 
-    df = merged.drop(["mr_geo_zipcode", "zip_code Postcode"], axis=1)
     return [df, var_dict]
 
 
