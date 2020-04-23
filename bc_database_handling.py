@@ -7,11 +7,8 @@ category_indices = {}
 
 
 def prep_df(frame, var_dict):
-    print(len(frame)
     frame = handle_df(frame, var_dict)
-    print(len(frame)
     frame = frame.reset_index(drop=True)
-    print(len(frame)      
     return frame
 
 
