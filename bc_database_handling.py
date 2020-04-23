@@ -91,10 +91,6 @@ def handle_variables(df):  # speciale behandelingen voor variabelen. Sommigen st
                                                  "Ja binnen 3 maanden": "Ja", "Nee nog niet": "Nee",
                                                  "nee": "Nee", "Ja, binnen drie maanden": "Ja",
                                                  "Nee, ik heb geen koopplannen": "Nee"})
-    df = df.drop(df[df["age"] < 12].index)
-    df = df.drop(df[df["age"] > 110].index)
-    df = df.drop(df[df["age_partner"] < 12].index)
-    df = df.drop(df[df["age_partner"] > 110].index)
     return df
 
 
