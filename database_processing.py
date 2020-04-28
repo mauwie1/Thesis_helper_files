@@ -299,7 +299,7 @@ import datetime
 def is_weekend(df, date_vars, var_dict):
     for date_var in date_vars:
         datetime_series = df[date_var].fillna(df[date_var].median())
-        datetime_series = datetime_series.map(lambda x: datetime.datetime.fromtimestamp(x/1e3))
+        datetime_series = datetime_series.map(lambda x: datetime.datetime.fromtimestamp(x/1e9))
         is_weekend_series = datetime_series.map(lambda x: 1 if x.weekday()>4 else 0)
         df[date_var + ' is_weekend'] = is_weekend_series
         var_dict["numeric_vars_mean_fill"].append(date_var + ' is_weekend')
