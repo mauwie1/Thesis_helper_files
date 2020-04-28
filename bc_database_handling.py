@@ -328,7 +328,7 @@ def income_augments(frame):
 #####
 # Clusters
 
-def transform_urls(urls_list, var_dict, url_dict, name):
+def transform_urls(urls_list, var_dict, url_dict):
     mapped_list = []
     for url_list in urls_list:
         mapped = []
