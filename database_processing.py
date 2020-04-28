@@ -283,7 +283,10 @@ def morph_city(frame, var_dict, gitlink = ''):
     steden = frame["mr_geo_city_name"]
     gemeentes = pd.DataFrame({"Gemeente": steden.map(gemeente_stad_dict)})
 
-    gemeente_stats = pd.read_csv("Kerncijfers_per_gemeente.csv",delimiter=";", decimal=",")
+    if gitlink != '':
+        gemeente_stats = pd.read_csv(gitlink + "/Kerncijfers_per_gemeente.csv",delimiter=";", decimal=",")
+    else:
+        gemeente_stats = pd.read_csv("Kerncijfers_per_gemeente.csv", delimiter=";", decimal=",")
     gemeente_stats.columns = ["Gemeente :" + col for col in gemeente_stats.columns]
     merged = gemeentes.merge(gemeente_stats, left_on="Gemeente", right_on="Gemeente :Gemeente", how="left")
     merged= merged.drop(['Gemeente', "Gemeente :Gemeente"], axis=1)
@@ -299,7 +302,7 @@ import datetime
 def is_weekend(df, date_vars, var_dict):
     for date_var in date_vars:
         datetime_series = df[date_var].fillna(df[date_var].median())
-        datetime_series = datetime_series.map(lambda x: datetime.datetime.fromtimestamp(x/1e9))
+        datetime_series = datetime_series.map(lambda x: datetime.datetime.fromtimestamp(x/1e3) if x<1e13 else datetime.datetime.fromtimestamp(x/1e9))
         is_weekend_series = datetime_series.map(lambda x: 1 if x.weekday()>4 else 0)
         df[date_var + ' is_weekend'] = is_weekend_series
         var_dict["numeric_vars_mean_fill"].append(date_var + ' is_weekend')
