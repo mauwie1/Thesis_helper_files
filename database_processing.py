@@ -14,7 +14,7 @@ def prep_csv_df(csv_files, var_dict, subsample = 1, proportions=[], sizes=[]):
     return frame
 
 def prep_bc_df(frame, var_dict):
-    frame = handle_df(frame, var_dict)
+    frame = handle_df(frame, var_dict, bc=True)
     frame = frame.reset_index(drop=True)
     return frame
 
@@ -45,7 +45,7 @@ def construct_frames(csv_names, variables, subsample, proportions=[], sizes=[]):
     full_df = full_df.drop([0])
     return [full_df, lengths]
 
-def handle_df(df, var_dict):
+def handle_df(df, var_dict, bc=False):
     df = df.applymap(lambda x: x.split('|') if type(x) == str else x)
 
     for cat_values in var_dict.values():
@@ -57,7 +57,7 @@ def handle_df(df, var_dict):
                     df[val] = df[val].apply(lambda x: x.replace(',', '.') if type(x) == str else x) #amerikanennnn
                     df[val] = pd.to_numeric(df[val])
 
-    df = handle_variables(df) # na numeric handling omdat preprocessing nodig is.
+    df = handle_variables(df, bc) # na numeric handling omdat preprocessing nodig is.
     df = stem_urls(df, "recentlyvieweditems")
     return df
 
@@ -77,11 +77,29 @@ def stem_urls(frame, url_var):
     frame[url_var] = updated_urls
     return frame
 
+def handle_variables(df, bc):  # speciale behandelingen voor variabelen. Sommigen staan niet uniform, etc
+    df['mortgage'] = df['mortgage'].map(lambda x: x / 1000 if x > 5000 else x)
+    df['annual_income_partner'] = df['annual_income_partner'].map(lambda x: x / 1000 if x > 5000 else x)
+    df['annual_income'] = df['annual_income'].map(lambda x: x / 1000 if x > 5000 else x)
+    df["search_state"] = df["search_state"].apply(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
+    df["search_state"] = df["search_state"].map({"ja binnen 3 maanden" : "Ja", "ja na 3 maanden":"Ja",
+                                                 "Ja binnen 3 maanden" : "Ja", "Nee nog niet": "Nee",
+                                                 "nee":"Nee", "Ja, binnen drie maanden": "Ja",
+                                                 "Nee, ik heb geen koopplannen" : "Nee"})
+    if not bc:
+        df = df.drop(df[df["age"] < 12].index)
+        df = df.drop(df[df["age"] > 110].index)
+        df = df.drop(df[df["age_partner"] < 12].index)
+        df = df.drop(df[df["age_partner"] > 110].index)
+    return df
+
+
 ##############################################
 # Preprocessing
 ##############################################
 
-def preprocess_df(df, var_dict, url_dict, url_dict2, gitlink ='', morph_categorical=True, threshold =20, augment = True):
+def preprocess_df(df, var_dict, url_dict, url_dict2, gitlink ='',
+                  morph_categorical=True, threshold =20, augment = True):
     if augment:
         df, var_dict, augmented_vars = augment_variables(df, var_dict,  url_dict, url_dict2, gitlink)
     else:
@@ -120,7 +138,6 @@ def preprocess_df(df, var_dict, url_dict, url_dict2, gitlink ='', morph_categori
 
 def fill_variables(df, var_dict):
     filled_dict = {}
-
     for val in var_dict["categorical_vars_median"]+ var_dict["categorical_vars_none"]:  # Dit zet (de meeste) missende categorieen naar de meest voorkomende
         df[val] = df[val].apply(lambda x: ','.join(x) if type(x)==list else x)
         if val in var_dict["categorical_vars_median"]:
@@ -148,20 +165,56 @@ def fill_variables(df, var_dict):
     return [df, filled_dict]
 
 
-def handle_variables(df):  # speciale behandelingen voor variabelen. Sommigen staan niet uniform, etc
-    df['mortgage'] = df['mortgage'].map(lambda x: x / 1000 if x > 5000 else x)
-    df['annual_income_partner'] = df['annual_income_partner'].map(lambda x: x / 1000 if x > 5000 else x)
-    df['annual_income'] = df['annual_income'].map(lambda x: x / 1000 if x > 5000 else x)
-    df["search_state"] = df["search_state"].apply(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
-    df["search_state"] = df["search_state"].map({"ja binnen 3 maanden" : "Ja", "ja na 3 maanden":"Ja",
-                                                 "Ja binnen 3 maanden" : "Ja", "Nee nog niet": "Nee",
-                                                 "nee":"Nee", "Ja, binnen drie maanden": "Ja",
-                                                 "Nee, ik heb geen koopplannen" : "Nee"})
-    df = df.drop(df[df["age"] < 12].index)
-    df = df.drop(df[df["age"] > 110].index)
-    df = df.drop(df[df["age_partner"] < 12].index)
-    df = df.drop(df[df["age_partner"] > 110].index)
+def preprocess_df_bc(df, var_dict, url_dict, url_dict2, gitlink, needed_columns, cat_dict, filled_dict):
+
+    df, var_dict, dummy_aug_vars = augment_variables(df, var_dict, url_dict, url_dict2, gitlink)
+
+    df = fill_variables_bc(df, filled_dict, var_dict)
+    for category in var_dict["categorical_vars_none"] + var_dict["categorical_vars_median"]:
+        if category in cat_dict.keys():
+            try:
+                df[category] = df[category].map(lambda x: x if x not in cat_dict[category].keys() else cat_dict[category][x])
+            except TypeError:
+                #print(df[category][0:50])
+                df[category] = df[category].map(lambda x: list(map(lambda y: y if y not in cat_dict[category].keys() else cat_dict[category][y], x))) #pfoe, mapt elements van list naar dict
+                #print(df[category][0:50])
+        try:
+            df[category] = df[category].apply(lambda x: x.split(','))
+        except:
+            print("not able to split " + category)
+        encoder = MultiLabelBinarizer()
+        transformed = encoder.fit_transform(df[category])
+        encodings = pd.DataFrame(transformed, columns=encoder.classes_)
+        new_cols = [str(category) + ' ' + str(sub_cat) for sub_cat in encodings.columns]
+        encodings.columns = new_cols
+        df = df.join(encodings)
+        df = df.drop([category], axis=1)
+    for needed_col in needed_columns:
+        if needed_col not in df.columns:
+            df[needed_col] = 0 #whole column is zero
+    df = df[needed_columns] #right order
+    return [df, var_dict]
+
+
+def fill_variables_bc(df, filled_dict, var_dict):
+    for val in var_dict["categorical_vars_median"] + var_dict["categorical_vars_none"]:  # Dit zet (de meeste) missende categorieen naar de meest voorkomende
+        df[val] = df[val].apply(lambda x: ','.join(x) if type(x) == list else x)
+        try:
+            df[val] = df[val].fillna(filled_dict[val])
+        except:  # if the variable has zero fill rate
+            df[val] = df[val].fillna(filled_dict[val])
+    for val in var_dict["numeric_vars_mean_fill"]:
+        try:
+            df[val] = df[val].fillna(filled_dict[val])
+        except:
+            print("no median found " + val)
+        df[val] = df[val].fillna(filled_dict[val])  # in case only NaN values, mean is Nan
+    for val in var_dict["numeric_vars_zero_fill"]:
+        df[val] = df[val].fillna(filled_dict[val])  # dit zet om naar 0
     return df
+
+def map_categories(df, category, cat_dict):
+    df[category] = df[category].map(cat_dict)
 
 
 def add_class_label(df, seg_amts):
@@ -268,7 +321,7 @@ def morph_zip(df, var_dict, gitlink = ''):
         elif column!= "zip_code Postcode":
             var_dict["categorical_vars_median"].append(column)
 
-    df["mr_geo_zipcode"] = df["mr_geo_zipcode"].apply(lambda x: int(x) if re.match(r"^[0-9]{4,5}$", str(x)) else None) # pakt de eerste, moet nog average fixen
+    df["mr_geo_zipcode"] = pd.to_numeric(df["mr_geo_zipcode"], errors='coerce')
     merged = df.merge(zip_df, left_on="mr_geo_zipcode", right_on="zip_code Postcode", how="left")  # zip_code zip_code as it has been transformed
 
     df = merged.drop(["mr_geo_zipcode", "zip_code Postcode"], axis=1)
@@ -302,7 +355,7 @@ import datetime
 def is_weekend(df, date_vars, var_dict):
     for date_var in date_vars:
         datetime_series = df[date_var].fillna(df[date_var].median())
-        datetime_series = datetime_series.map(lambda x: datetime.datetime.fromtimestamp(x/1e3) if x<1e13 else datetime.datetime.fromtimestamp(x/1e9))
+        datetime_series = datetime_series.map(lambda x: datetime.datetime.fromtimestamp(x/1e3) if abs(x)<1e13 else datetime.datetime.fromtimestamp(x/1e9))
         is_weekend_series = datetime_series.map(lambda x: 1 if x.weekday()>4 else 0)
         df[date_var + ' is_weekend'] = is_weekend_series
         var_dict["numeric_vars_mean_fill"].append(date_var + ' is_weekend')
@@ -358,7 +411,7 @@ def search_keywords(frame, var_dict): #doet niks, niemand zoekt blijkbaar
     bestaande_woning_searches, starter_searches, volgende_woning_searches = np.zeros(len(user_searches)),np.zeros(len(user_searches)),np.zeros(len(user_searches))
     c=0
     for searches in user_searches: #one can have multiple searches
-        if not isinstance(searches, float):
+        if isinstance(searches, list):
             for search in searches:
                 for keyword in starter_keywords:
                     if keyword in search:
@@ -391,7 +444,7 @@ def url_keywords(frame, var_dict): #url has been formatted already
     for c in range(0, len(user_url_headings)): #one can have multiple searches
         urls_headings = user_url_headings[c]
         indiv_urls = mr_urls[c]
-        if not isinstance(urls_headings, float):
+        if isinstance(urls_headings, list):
             for url in urls_headings:
                 for keyword in starter_keywords:
                     if keyword in url:
