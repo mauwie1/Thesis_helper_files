@@ -60,7 +60,7 @@ def preprocess_df(df, var_dict, url_dict, needed_columns, cat_dict, filled_dict)
 
 
 def fill_variables(df, filled_dict, var_dict):
-    for val in var_dict["categorical_vars"]: # Dit zet (de meeste) missende categorieen naar de meest voorkomende
+    for val in var_dict["categorical_vars_median"] + var_dict["categorical_vars_none"]:  # Dit zet (de meeste) missende categorieen naar de meest voorkomende
         df[val] = df[val].apply(lambda x: ','.join(x) if type(x) == list else x)
         try:
             df[val] = df[val].fillna(filled_dict[val])
@@ -201,9 +201,9 @@ import datetime
 
 def is_weekend(df, date_vars, var_dict):
     for date_var in date_vars:
-        datetime_series = df[date_var]
+        datetime_series = df[date_var].fillna(df[date_var].median())
         datetime_series = datetime_series.map(
-            lambda x: datetime.datetime.fromtimestamp(abs(int(x)) / 1e3))
+            lambda x: datetime.datetime.fromtimestamp(int(x) / 1e3) if x>0 else datetime.datetime.fromtimestamp(0))
         is_weekend_series = datetime_series.map(lambda x: 1 if x.weekday() > 4 else 0)
         df[date_var + ' is_weekend'] = is_weekend_series
         var_dict["numeric_vars_mean_fill"].append(date_var + ' is_weekend')
@@ -328,7 +328,7 @@ def income_augments(frame):
 #####
 # Clusters
 
-def transform_urls(urls_list, var_dict, url_dict):
+def transform_urls(urls_list, var_dict, url_dict, name):
     mapped_list = []
     for url_list in urls_list:
         mapped = []
