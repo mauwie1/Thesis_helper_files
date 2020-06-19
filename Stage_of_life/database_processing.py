@@ -351,8 +351,6 @@ def augment_variables(frame, var_dict, url_dict, url_dict2, gitlink):
     var_dict["numeric_vars_mean_fill"].append("max_income")
     var_dict["numeric_vars_mean_fill"].append("total_income")
     augmented_vars += ["annual_income", "annual_income_partner"]
-    #frame, var_dict = is_weekend(frame, ["firstvisit", "lastvisit"], var_dict)
-    #augmented_vars += ["firstvisit", "lastvisit"]    #gewoon vaak onjuist
     frame, var_dict = morph_zip(frame, var_dict, gitlink)
     augmented_vars.append("mr_geo_zipcode")
     frame, var_dict = morph_city(frame, var_dict, gitlink)
