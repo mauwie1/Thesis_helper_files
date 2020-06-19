@@ -2,11 +2,14 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer
+import importlib
 category_indices = {}
 import re
+import itertools
 
-def prep_csv_df(csv_files, var_dict, subsample = 1, proportions=[], sizes=[]):
-    frame_info = construct_frames(csv_files, [item for sublist in var_dict.values() for item in sublist], subsample, proportions, sizes)
+
+def prep_csv_df(csv_files, var_dict, subsample = 1, proportions=[], sizes=[], thousands="."):
+    frame_info = construct_frames(csv_files, [item for sublist in var_dict.values() for item in sublist], subsample, proportions, sizes, thousands)
     frame, lengths = frame_info[0], frame_info[1]
     frame = add_class_label(frame, lengths)
     frame = handle_df(frame, var_dict)
@@ -18,15 +21,21 @@ def prep_bc_df(frame, var_dict):
     frame = frame.reset_index(drop=True)
     return frame
 
-def construct_frames(csv_names, variables, subsample, proportions=[], sizes=[]):
+def construct_frames(csv_names, variables, subsample, proportions=[], sizes=[], thousands="."):
     lengths = []
     if proportions == [] and sizes== []: #onbekend?
-        full_df = pd.read_csv(csv_names[0], sep=',', low_memory=False, usecols = variables, thousands='.')
+        if thousands=='':
+            full_df = pd.read_csv(csv_names[0], sep=',', low_memory=False, usecols=variables)
+        else:
+            full_df = pd.read_csv(csv_names[0], sep=',', low_memory=False, usecols = variables, thousands=thousands)
         full_df = full_df[:int(subsample*len(full_df))]
         lengths.append(len(full_df)-1)  # -1 omdat de eerste row een 2e header is
 
         for csv_name in csv_names[1:]:
-            csv_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, thousands='.')
+            if thousands == '':
+                csv_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables)
+            else:
+                csv_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, thousands=thousands)
             csv_df = csv_df[:int(subsample * len(csv_df))]
             lengths.append(len(csv_df) - 1)  # -1 omdat de eerste row een 2e header is
             full_df = pd.concat([full_df, csv_df])
@@ -34,12 +43,18 @@ def construct_frames(csv_names, variables, subsample, proportions=[], sizes=[]):
         max_over_ratio = np.argmax([(proportions[x]*(subsample * sum(sizes))/sizes[x]) for x in range(0, len(sizes))]) #pfoei, argmax van de ratio van sizes vs wanted sizes
         imposed_size = min((sizes[max_over_ratio] / proportions[max_over_ratio]) * proportions[0], subsample*proportions[0]*sum(sizes))
         csv_name = csv_names[0]
-        full_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, thousands='.', nrows = int(imposed_size))
+        if thousands== '':
+            full_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, nrows = int(imposed_size))
+        else:
+            full_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, thousands=thousands,nrows=int(imposed_size))
         lengths.append(len(full_df) - 1)
         for x in range(1, len(csv_names)):
             imposed_size = min((sizes[max_over_ratio] / proportions[max_over_ratio]) * proportions[x], subsample*proportions[x]*sum(sizes))
             csv_name = csv_names[x]
-            csv_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, thousands='.', nrows = int(imposed_size))
+            if thousands == '':
+                csv_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, nrows = int(imposed_size))
+            else:
+                csv_df = pd.read_csv(csv_name, sep=',', low_memory=False, usecols=variables, thousands=thousands, nrows=int(imposed_size))
             lengths.append(len(csv_df) - 1)  # -1 omdat de eerste row een 2e header is
             full_df = pd.concat([full_df, csv_df])
     full_df = full_df.drop([0])
@@ -50,12 +65,12 @@ def handle_df(df, var_dict, bc=False):
 
     for cat_values in var_dict.values():
         for val in cat_values:
-            if val not in var_dict["categorical_vars_none"]+ var_dict["categorical_vars_median"] + var_dict["occurence_counts"]:
+            if val not in var_dict["categorical_vars_none"]+ var_dict["categorical_vars_median"] + var_dict["occurence_counts"] + var_dict["list_vars"]:
                 df[val] = df[val].apply(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
                 if val in var_dict["numeric_vars_mean_fill"] + var_dict["numeric_vars_zero_fill"]:
                     df[val] = df[val].apply(lambda x: x.replace('.', '') if type(x) == str else x)
                     df[val] = df[val].apply(lambda x: x.replace(',', '.') if type(x) == str else x) #amerikanennnn
-                    df[val] = pd.to_numeric(df[val])
+                    df[val] = pd.to_numeric(df[val], errors="coerce")
 
     df = handle_variables(df, bc) # na numeric handling omdat preprocessing nodig is.
     df = stem_urls(df, "recentlyvieweditems")
@@ -77,21 +92,68 @@ def stem_urls(frame, url_var):
     frame[url_var] = updated_urls
     return frame
 
+def remove_columns(train_x, validation_x, test_x, col_name, sub_cols=True):
+    if sub_cols:
+        col_name = [x for x in train_x.columns if col_name == x.split()[0]]
+    train_x = train_x.drop(col_name, axis=1)
+    validation_x = validation_x.drop(col_name, axis=1)
+    test_x = test_x.drop(col_name, axis=1)
+    return [train_x, validation_x, test_x]
+
+
 def handle_variables(df, bc):  # speciale behandelingen voor variabelen. Sommigen staan niet uniform, etc
     df['mortgage'] = df['mortgage'].map(lambda x: x / 1000 if x > 5000 else x)
-    df['annual_income_partner'] = df['annual_income_partner'].map(lambda x: x / 1000 if x > 5000 else x)
-    df['annual_income'] = df['annual_income'].map(lambda x: x / 1000 if x > 5000 else x)
+    df['annual_income_partner'] = df['annual_income_partner'].map(lambda x: x * 12 / 1000 if x > 1000 and x < 150000 else x)  # 150000/maand == 1.8 miljoen per jaar, jaja
+    df['annual_income_partner'] = df['annual_income_partner'].map( lambda x: x / 1000 if x > 2000 else x)  # mensen die 2 miljoen per jaar verdienen en een hypotheek afsluiten??
+    df['annual_income_partner'] = df['annual_income_partner'].map(lambda x: np.nan if x > 2000 else x)  # nonsens variabelen
+    df['annual_income'] = df['annual_income'].map(lambda x: x / 1000) #mensen die 2 miljoen per jaar verdienen en een hypotheek afsluiten??
+    df['annual_income'] = df['annual_income'].map(lambda x: x*(12/1000) if x > 1000 and x<150000 else x) #150000/maand == 1.8 miljoen per jaar, jaja
+    df['annual_income'] = df['annual_income'].map(lambda x: x / 1000 if x > 2000 else x) #mensen die 2 miljoen per jaar verdienen en een hypotheek afsluiten??
+    df['annual_income'] = df['annual_income'].map(lambda x: np.nan if x > 2000 else x)  #nonsens variabelen
     df["search_state"] = df["search_state"].apply(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
     df["search_state"] = df["search_state"].map({"ja binnen 3 maanden" : "Ja", "ja na 3 maanden":"Ja",
                                                  "Ja binnen 3 maanden" : "Ja", "Nee nog niet": "Nee",
                                                  "nee":"Nee", "Ja, binnen drie maanden": "Ja",
                                                  "Nee, ik heb geen koopplannen" : "Nee"})
+    df["age"] = df["age"].map(lambda x: x/10 if x>100 and x<1000 else x)
+    df["age_partner"] = df["age_partner"].map(lambda x: x/10 if x>100 and x<1000 else x) #best veel blijkbaar?
     if not bc:
         df = df.drop(df[df["age"] < 12].index)
         df = df.drop(df[df["age"] > 110].index)
         df = df.drop(df[df["age_partner"] < 12].index)
         df = df.drop(df[df["age_partner"] > 110].index)
     return df
+
+def add_class_label(df, seg_amts):
+    c=1
+    y = np.repeat(0, seg_amts[0])
+    while c<len(seg_amts):
+        y = np.concatenate([y, np.repeat(c, seg_amts[c])])
+        c += 1
+    df['y'] = y  # we voegen hem toe zodat we de database kunnen shufflen en de toebehorendheid niet verloren gaat.
+
+    shuffle_df = df.sample(frac=1)  # dit shufflet de database, zodat train en testset een random hoeveelheid van beide klassen hebben.
+
+    return shuffle_df
+
+def list_remove(target, list_var, frame):
+    frame[list_var] = frame[list_var].map(lambda x: list(filter(lambda y: y!=target, x)) if isinstance(x, list) else x)
+    frame[list_var] = frame[list_var].map(lambda x: np.NaN if x==[] else x) #[] wordt None
+    return frame
+
+
+def resize_train(train_x, train_y, wanted_proportions, smote=False):
+    imposed_sizes = [prop * len(train_x) for prop in wanted_proportions]
+    actual_sizes = [len(train_y[train_y == y]) for y in sorted(train_y.unique())]
+    smallest_ratio = np.argmin([actual_sizes[i] / imposed_sizes[i] for i in range(0, len(wanted_proportions))])
+    wanted_sizes = [int(wanted_proportions[i] / wanted_proportions[smallest_ratio] * actual_sizes[smallest_ratio]) for i
+                    in range(0, len(wanted_proportions))]
+    cl_frame = train_x.join(train_y)
+    frame = cl_frame[cl_frame["y"] == 0][0:wanted_sizes[0]]
+    for c in range(1, len(wanted_sizes)):
+        frame = pd.concat([frame, cl_frame[cl_frame["y"] == c][0:wanted_sizes[c]]])
+    res_train_x, res_train_y = frame.drop("y", axis=1), frame["y"]
+    return res_train_x, res_train_y
 
 
 ##############################################
@@ -103,32 +165,33 @@ def preprocess_df(df, var_dict, url_dict, url_dict2, gitlink ='',
     if augment:
         df, var_dict, augmented_vars = augment_variables(df, var_dict,  url_dict, url_dict2, gitlink)
     else:
-        df = df.drop(var_dict["special_vars"] + var_dict["bool_datetimes"], axis=1)
         augmented_vars = []
     unfilled_df = df.copy(deep=True)
     df, filled_dict = fill_variables(df, var_dict)
     non_onehot_df = df.copy(deep=True)
     modified_df = df
-    for category in var_dict["categorical_vars_median"]+ var_dict["categorical_vars_none"]:
+    for category in var_dict["categorical_vars_median"]+ var_dict["categorical_vars_none"] + var_dict["list_vars"]:
         modified_df = modified_df.drop(category, axis=1)  # prevents faulty indices and allows for references to the column still
-
     other_dict = {}
     if morph_categorical == True:
-        for category in var_dict["categorical_vars_median"]+ var_dict["categorical_vars_none"]:
-            if len(df[category].unique()) > threshold:  # anders crash, teveel kolommen
-                df, other_values = other_morph(df, category, threshold)
-                other_dict[category] = other_values
-            try:
-                df[category] = df[category].apply(lambda x: x.split(','))
-            except:
-                print("not able to split " + category)
-            encoder = MultiLabelBinarizer()
+        for category in var_dict["categorical_vars_median"]+ var_dict["categorical_vars_none"] + var_dict["list_vars"]:
+            if category in var_dict["list_vars"]:
+                df, other_dict = other_morph(df, category, threshold, other_dict, is_list=True)
+            else:
+                if len(df[category].unique()) > threshold:  # anders crash, teveel kolommen
+                    df, other_dict = other_morph(df, category, threshold, other_dict)
+                try:
+                    df[category] = df[category].apply(lambda x: str(x).split(','))
+                except:
+                    print("not able to split " + category)
+            encoder = MultiLabelCounter()
             transformed = encoder.fit_transform(df[category])
             encodings = pd.DataFrame(transformed, columns=encoder.classes_)
             new_cols = []
             for sub_cat in encodings.columns:
                 new_cols.append(str(category) + ' ' + str(sub_cat))
             encodings.columns = new_cols
+            encodings.index = df.index
             category_indices[category] = range(len(modified_df.columns),
                                                len(modified_df.columns) + len(encodings.columns))
             df = df.join(encodings)
@@ -136,8 +199,10 @@ def preprocess_df(df, var_dict, url_dict, url_dict2, gitlink ='',
             df = df.drop([category], axis=1)
     return [df, unfilled_df, non_onehot_df, other_dict, filled_dict, var_dict, augmented_vars]
 
+
 def fill_variables(df, var_dict):
     filled_dict = {}
+
     for val in var_dict["categorical_vars_median"]+ var_dict["categorical_vars_none"]:  # Dit zet (de meeste) missende categorieen naar de meest voorkomende
         df[val] = df[val].apply(lambda x: ','.join(x) if type(x)==list else x)
         if val in var_dict["categorical_vars_median"]:
@@ -151,49 +216,64 @@ def fill_variables(df, var_dict):
         elif val in var_dict["categorical_vars_none"]:
             df[val] = df[val].fillna('Empty')
             filled_dict[val] = 'Empty'
+    for val in var_dict["list_vars"]:
+        df[val] = df[val].map(lambda x: x if isinstance(x, list) else [])
+        filled_dict[val] = []
     for val in var_dict["numeric_vars_mean_fill"]:  # dit zet numerieke waardes naar de gemiddelde waardes
-        try:
-            df[val] = df[val].fillna(df[val].median())
-            filled_dict[val] = df[val].median()
-        except:
-            print("no median found " + val)
-            df[val] = df[val].fillna(0) #in case only NaN values, mean is Nan
+        med = df[val].median()
+        if not np.isnan(med):
+            df[val] = df[val].fillna(med)
+            filled_dict[val] = med
+        else:
+            df[val] = df[val].fillna(0)
             filled_dict[val] = 0
-    for val in var_dict["numeric_vars_zero_fill"] + var_dict['bool_datetimes'] + var_dict["occurence_counts"]:
+    for val in var_dict["numeric_vars_zero_fill"]:
         df[val] = df[val].fillna(0)  # dit zet om naar 0
         filled_dict[val] = 0
+
+    for var in var_dict["occurence_counts"]:
+        df[var] = df[var].fillna(0)
+        df[var] = df[var].map(lambda x: len(x) if isinstance(x, list) else x)
+
+    for var in var_dict["bool_datetimes"]:
+        na_cols = df[var].isna()
+        na_cols = na_cols.map(lambda x: 1 if x == False else 0)
+        df[var] = na_cols
     return [df, filled_dict]
 
 
-def preprocess_df_bc(df, var_dict, url_dict, url_dict2, gitlink, needed_columns, cat_dict, filled_dict):
+def preprocess_df_bc(df, var_dict, url_dict, url_dict2, gitlink, needed_columns, cat_dict, filled_dict, augment=True):
 
-    df, var_dict, dummy_aug_vars = augment_variables(df, var_dict, url_dict, url_dict2, gitlink)
-
+    if augment:
+        df, var_dict, dummy_aug_vars = augment_variables(df, var_dict, url_dict, url_dict2, gitlink)
     df = fill_variables_bc(df, filled_dict, var_dict)
-    for category in var_dict["categorical_vars_none"] + var_dict["categorical_vars_median"]:
+    for category in var_dict["categorical_vars_none"] + var_dict["categorical_vars_median"] + var_dict["list_vars"]:
         if category in cat_dict.keys():
-            try:
-                df[category] = df[category].map(lambda x: x if x not in cat_dict[category].keys() else cat_dict[category][x])
-            except TypeError:
-                #print(df[category][0:50])
-                df[category] = df[category].map(lambda x: list(map(lambda y: y if y not in cat_dict[category].keys() else cat_dict[category][y], x))) #pfoe, mapt elements van list naar dict
-                #print(df[category][0:50])
+            if category in var_dict["list_vars"]:
+                df[category] = df[category].map(lambda x: list(map(lambda y: "Other" if y not in cat_dict[category] else y, x)) if isinstance(x, list) else x) #pfoe, mapt elements van list naar dict
+            else:
+                    df[category] = df[category].map(lambda x: "Other" if x not in cat_dict[category] else x)
         try:
-            df[category] = df[category].apply(lambda x: x.split(','))
+            df[category] = df[category].map(lambda x: str(x).split(',') if not isinstance(x, list) else x)
         except:
             print("not able to split " + category)
-        encoder = MultiLabelBinarizer()
+        encoder = MultiLabelCounter()
         transformed = encoder.fit_transform(df[category])
         encodings = pd.DataFrame(transformed, columns=encoder.classes_)
         new_cols = [str(category) + ' ' + str(sub_cat) for sub_cat in encodings.columns]
         encodings.columns = new_cols
-        df = df.join(encodings)
+        needed_encodings = encodings[encodings.columns&needed_columns]
+        encodings=None
+        needed_encodings.index = df.index
+        df = df.join(needed_encodings)
         df = df.drop([category], axis=1)
     for needed_col in needed_columns:
         if needed_col not in df.columns:
             df[needed_col] = 0 #whole column is zero
     df = df[needed_columns] #right order
     return [df, var_dict]
+
+
 
 
 def fill_variables_bc(df, filled_dict, var_dict):
@@ -211,32 +291,44 @@ def fill_variables_bc(df, filled_dict, var_dict):
         df[val] = df[val].fillna(filled_dict[val])  # in case only NaN values, mean is Nan
     for val in var_dict["numeric_vars_zero_fill"]:
         df[val] = df[val].fillna(filled_dict[val])  # dit zet om naar 0
+    for val in var_dict["list_vars"]:
+        df[val] = df[val].map(lambda x: x if isinstance(x, list) else [])
+    for var in var_dict["occurence_counts"]:
+        df[var] = df[var].fillna(0)
+        df[var] = df[var].map(lambda x: len(x) if isinstance(x, list) else x)
+
+    for var in var_dict["bool_datetimes"]:
+        na_cols = df[var].isna()
+        na_cols = na_cols.map(lambda x: 1 if x == False else 0)
+        df[var] = na_cols
     return df
 
 def map_categories(df, category, cat_dict):
     df[category] = df[category].map(cat_dict)
 
 
-def add_class_label(df, seg_amts):
-    c=1
-    y = np.repeat(0, seg_amts[0])
-    while c<len(seg_amts):
-        y = np.concatenate([y, np.repeat(c, seg_amts[c])])
-        c += 1
-    df['y'] = y  # we voegen hem toe zodat we de database kunnen shufflen en de toebehorendheid niet verloren gaat.
 
-    shuffle_df = df.sample(frac=1)  # dit shufflet de database, zodat train en testset een random hoeveelheid van beide klassen hebben.
+def other_morph(frame, col_var, thresh, other_dict, is_list=False):
+    if is_list:
+        url_dict = {}
+        for entry in frame[col_var]:
+            if isinstance(entry, list):
+                for url in entry:
+                    if url in url_dict.keys():
+                        url_dict[url] += 1
+                    else:
+                        url_dict[url] = 1
+        good_vars = [key for key, value in sorted(url_dict.items(), key=lambda item: item[1], reverse=True)[:thresh]] # de urls die minder vaak dan thresh voorkomen
+    else:
+        good_vars = frame[col_var].value_counts().index[:thresh]
 
-    return shuffle_df
+    if is_list:
+        frame[col_var] = frame[col_var].map(lambda x: list(map(lambda y: "Other" if y not in good_vars else y, x)) if isinstance(x, list) else x)
+    else:
+        frame[col_var] = frame[col_var].map(lambda y: "Other" if y not in good_vars else y)
 
-
-def other_morph(frame, col_var, thresh):
-    other_vars = frame[col_var].value_counts().index[thresh:]
-    map_dict = {}
-    for var in other_vars:
-        map_dict[var] = "Other"
-    frame[col_var] = frame[col_var].replace(map_dict)
-    return [frame, map_dict]
+    other_dict[col_var] = good_vars
+    return [frame, other_dict]
 
 
 
@@ -247,42 +339,40 @@ def other_morph(frame, col_var, thresh):
 ##################################################################################################
 def augment_variables(frame, var_dict, url_dict, url_dict2, gitlink):
     augmented_vars = []
-
+    orig_indices = frame.index
     frame["Visit_part_of_day"] = time_of_day(frame["visit_time"])
     augmented_vars.append("visit_time")
     var_dict["categorical_vars_median"].append("Visit_part_of_day")
-    for var in var_dict["occurence_counts"]:
-        frame[var] = frame[var].fillna(0)
-        frame[var] = frame[var].map(lambda x : len(x) if isinstance(x, list) else x)
-
-    for var in var_dict["bool_datetimes"]:
-        na_cols = frame[var].isna()
-        na_cols = na_cols.map(lambda x: 1 if x==False else 0)
-        frame[var] = na_cols
 
     frame["has_partner"] = pd.to_numeric(has_partner(frame))
     var_dict["numeric_vars_mean_fill"].append("has_partner")
     augmented_vars += ["age", "age_partner"]
-
     frame["max_income"], frame["total_income"] = pd.to_numeric(income_augments(frame)[0]), pd.to_numeric(income_augments(frame)[1])
     var_dict["numeric_vars_mean_fill"].append("max_income")
     var_dict["numeric_vars_mean_fill"].append("total_income")
     augmented_vars += ["annual_income", "annual_income_partner"]
-
-    frame, var_dict = is_weekend(frame, ["firstvisit", "lastvisit"], var_dict)
-    augmented_vars += ["firstvisit", "lastvisit"]
+    #frame, var_dict = is_weekend(frame, ["firstvisit", "lastvisit"], var_dict)
+    #augmented_vars += ["firstvisit", "lastvisit"]    #gewoon vaak onjuist
     frame, var_dict = morph_zip(frame, var_dict, gitlink)
     augmented_vars.append("mr_geo_zipcode")
     frame, var_dict = morph_city(frame, var_dict, gitlink)
     augmented_vars.append("mr_geo_city_name")
     frame, var_dict = search_keywords(frame, var_dict)
     augmented_vars.append("keywords")
+
+    frame, var_dict = time_between_visits(frame, var_dict)
+    augmented_vars.append("visit_timestamps")
+
+    frame, var_dict = url_count(frame, var_dict)
     frame, var_dict = url_keywords(frame, var_dict)
     augmented_vars.append("url-name")
     subframe, var_dict = transform_urls(frame["recentlyvieweditems"], var_dict, url_dict, "url_mr")
-    frame = pd.concat([frame, subframe], axis=1)
+    subframe.index = frame.index
+    frame = frame.join(subframe)
     subframe, var_dict = transform_urls(frame["url-name"], var_dict, url_dict2, "url_heading")
-    frame = pd.concat([frame, subframe], axis=1)
+    subframe.index = frame.index
+    frame = frame.join(subframe)
+    frame.index=orig_indices
     return [frame, var_dict, augmented_vars]
 
 
@@ -291,9 +381,9 @@ def morph_zip(df, var_dict, gitlink = ''):
     if gitlink!='':
         zip_df = pd.read_csv(gitlink + "/zipcode_final.csv")
     else:
-        zip_df = pd.read_csv("zipcode_final.csv") #, usecols=["Postcode", "Bevolking", "Inkomen", "Gemiddelde_leeftijd"])
-    #zip_df.columns = ["zip_code", "population", "income", "avg_age"]
+        zip_df = pd.read_csv("zipcode_final.csv")
     zip_df["Postcode"] = zip_df["Postcode"].astype(int)
+    df["zip_temp"] = df["mr_geo_zipcode"].map(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
     zip_df["Total_income"] = zip_df["Bevolking"] * zip_df["Inkomen"]
 
     avg_income_person = zip_df["Total_income"].sum()/zip_df["Bevolking"].sum()
@@ -320,11 +410,10 @@ def morph_zip(df, var_dict, gitlink = ''):
             zip_df[column] = pd.to_numeric(zip_df[column])
         elif column!= "zip_code Postcode":
             var_dict["categorical_vars_median"].append(column)
-
-    df["mr_geo_zipcode"] = pd.to_numeric(df["mr_geo_zipcode"], errors='coerce')
-    merged = df.merge(zip_df, left_on="mr_geo_zipcode", right_on="zip_code Postcode", how="left")  # zip_code zip_code as it has been transformed
-
-    df = merged.drop(["mr_geo_zipcode", "zip_code Postcode"], axis=1)
+    df["zip_temp"] = pd.to_numeric(df["zip_temp"], errors='coerce')
+    merged = df.merge(zip_df, left_on="zip_temp", right_on="zip_code Postcode", how="left")  # zip_code zip_code as it has been transformed
+    merged.index = df.index
+    df = merged.drop(["zip_code Postcode", "zip_temp"], axis=1)
     return [df, var_dict]
 
 def morph_city(frame, var_dict, gitlink = ''):
@@ -333,7 +422,7 @@ def morph_city(frame, var_dict, gitlink = ''):
     else:
         gemeente_steden = pd.read_csv("Gemeente_per_woonplaats.csv", delimiter=";", decimal=",")
     gemeente_stad_dict = dict(zip(gemeente_steden["Stad"], gemeente_steden["Gemeente"]))
-    steden = frame["mr_geo_city_name"]
+    steden = frame["mr_geo_city_name"].map(lambda x: x if not isinstance(x, list) else x[0] if len(x) else None)
     gemeentes = pd.DataFrame({"Gemeente": steden.map(gemeente_stad_dict)})
 
     if gitlink != '':
@@ -347,8 +436,9 @@ def morph_city(frame, var_dict, gitlink = ''):
     merged["Gemeente :Inkomen"] = merged["Gemeente :Inkomen"].map(lambda x: x.replace(',', '.') if isinstance(x, str) and re.search(r".+,.+",x) else None)
     merged["Gemeente :Inkomen"] = pd.to_numeric(merged["Gemeente :Inkomen"])
     var_dict["numeric_vars_mean_fill"] += list(merged.columns)
-    frame = frame.drop("mr_geo_city_name", axis=1)
-    return [pd.concat([frame, merged], axis=1), var_dict]
+    merged.index=frame.index
+    conc_frame = frame.join(merged)
+    return [conc_frame, var_dict]
 
 import datetime
 
@@ -387,18 +477,20 @@ def time_of_day(visit_time):
             vals.append(None)
     return vals
 
+def time_between_visits(frame, var_dict):
+    avg_time = frame["visit_timestamps"].map(lambda x: (int(x[0])-int(x[len(x)-1])/len(x) if type(x)== list and len(x)>1 else np.nan)) #eerste - laatste/aantal is het gemiddelde
+    visit_amt = frame["visit_timestamps"].map(lambda x: len(x) if type(x)==list else 0)
+    mr_time_between = frame["visit_timestamps"].map(lambda x: int(x[len(x)-1])-int(x[len(x)-2]) if type(x)==list and len(x)>1 else np.nan)
+    frame["avg_time_between_visits"], frame["visit_amt"], frame["mr_time_between_visits"] = avg_time, visit_amt, mr_time_between
+    var_dict["categorical_vars_none"].remove("visit_timestamps")
+    frame = frame.drop("visit_timestamps", axis=1)
+    var_dict["numeric_vars_mean_fill"]+= ["avg_time_between_visits", "mr_time_between_visits"]
+    var_dict["numeric_vars_zero_fill"] += ["visit_amt"]
+    return [frame, var_dict]
 
 def has_partner(frame):
-    c=0
-    ages = frame["age"]
-    partner_ages = frame['age_partner']
-    bools = []
-    while c<len(frame):
-        if isinstance(ages.iloc[c], int) and isinstance(partner_ages.iloc[c], int):
-            bools.append(1)
-        else:
-            bools.append(0)
-        c+=1
+    nans = frame["age_partner"].notna()
+    bools = nans.map(lambda x: 1 if x==True else 0)
     return bools
 
 def search_keywords(frame, var_dict): #doet niks, niemand zoekt blijkbaar
@@ -427,6 +519,13 @@ def search_keywords(frame, var_dict): #doet niks, niemand zoekt blijkbaar
     var_dict["numeric_vars_zero_fill"] += ["search bestaande_woning", "search volgende_woning", "search starter"]
     return [frame, var_dict]
 
+def url_count(frame, var_dict):
+    frame["total_url_counts"] = frame["url-name"].map(lambda x: len(x) if isinstance(x, list) else 0)
+    visits = frame["visits"].map(lambda x: int(x) if not np.isnan(x) and not x==0 else 1)
+    frame["avg_url_counts"] = frame["total_url_counts"]/visits
+    var_dict["numeric_vars_zero_fill"]+= ["total_url_counts", "avg_url_counts"]
+    return frame, var_dict
+
 def url_keywords(frame, var_dict): #url has been formatted already
     user_url_headings = frame["url-name"]
     mr_urls = frame["recentlyvieweditems"]
@@ -442,8 +541,8 @@ def url_keywords(frame, var_dict): #url has been formatted already
     bestaande_woning_urls, starter_urls, volgende_woning_urls = np.zeros(len(user_url_headings)), np.zeros(len(user_url_headings)), np.zeros(len(user_url_headings))
 
     for c in range(0, len(user_url_headings)): #one can have multiple searches
-        urls_headings = user_url_headings[c]
-        indiv_urls = mr_urls[c]
+        urls_headings = user_url_headings.iloc[c]
+        indiv_urls = mr_urls.iloc[c]
         if isinstance(urls_headings, list):
             for url in urls_headings:
                 for keyword in starter_keywords:
@@ -455,7 +554,7 @@ def url_keywords(frame, var_dict): #url has been formatted already
                 for keyword in volgende_woning_keywords:
                     if keyword in url:
                         volgende_woning_urls[c] += 1
-        if not isinstance(indiv_urls, float):
+        if isinstance(indiv_urls, list):
             for url in indiv_urls:
                 for keyword in starter_keywords:
                     if keyword in url:
@@ -508,3 +607,75 @@ def transform_urls(urls_list, var_dict, url_dict, name):
     var_dict["numeric_vars_zero_fill"] += list(df.columns)
 
     return [df, var_dict]
+
+
+#####
+#Conversie
+from imblearn.over_sampling import SMOTE
+def smote_fix_db(x, class_label, wanted_proportion):
+    y = x[class_label]
+    sm = SMOTE(sampling_strategy=wanted_proportion/(1-wanted_proportion))
+    x, y = sm.fit_resample(x, y)
+    x= pd.DataFrame(x)
+    x[class_label] = y
+    return x
+
+
+
+
+
+
+
+class MultiLabelCounter():
+    def __init__(self, classes=None):
+        self.classes_ = classes
+
+    def fit(self,y):
+        self.classes_ = sorted(set(itertools.chain.from_iterable(y)))
+        self.mapping = dict(zip(self.classes_,
+                                         range(len(self.classes_))))
+        return self
+
+    def transform(self,y):
+        yt = []
+        for labels in y:
+            data = [0]*len(self.classes_)
+            for label in labels:
+                data[self.mapping[label]] +=1
+            yt.append(data)
+        return yt
+
+    def fit_transform(self,y):
+        return self.fit(y).transform(y)
+
+class TargetEncoder():
+    def __init__(self, classes=None):
+        self.classes_ = classes
+    def fit(self,series, target):
+        self.classes_ = sorted(set(itertools.chain.from_iterable(series)))
+        df = pd.DataFrame(zip(series, target), columns=["x", "y"])
+        target_classes = sorted(target.unique())
+        if target_classes>2:
+            for cl in self.classes:
+                co_ocs = []
+                for cl_y in target_classes:
+                    co_oc = len(df[df["x"] == cl and df["y"] == cl_y]) / len(df[df["x"] == cl])
+                    co_ocs.append(co_oc)
+        else:
+            for cl in self.classes:
+                co_oc = len(df[df["x"]==cl and df["y"]==1])/len(df[df["x"]==cl])
+        self.mapping = dict(zip(self.classes_,
+                                         range(len(self.classes_))))
+        return self
+
+    def transform(self,y):
+        yt = []
+        for labels in y:
+            data = [0]*len(self.classes_)
+            for label in labels:
+                data[self.mapping[label]] +=1
+            yt.append(data)
+        return yt
+
+    def fit_transform(self,y):
+        return self.fit(y).transform(y)
