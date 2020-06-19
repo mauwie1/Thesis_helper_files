@@ -138,7 +138,6 @@ def preprocess_df(df, var_dict, url_dict, url_dict2, gitlink ='',
 
 def fill_variables(df, var_dict):
     filled_dict = {}
-
     for val in var_dict["categorical_vars_median"]+ var_dict["categorical_vars_none"]:  # Dit zet (de meeste) missende categorieen naar de meest voorkomende
         df[val] = df[val].apply(lambda x: ','.join(x) if type(x)==list else x)
         if val in var_dict["categorical_vars_median"]:
@@ -167,7 +166,9 @@ def fill_variables(df, var_dict):
 
 
 def preprocess_df_bc(df, var_dict, url_dict, url_dict2, gitlink, needed_columns, cat_dict, filled_dict):
+
     df, var_dict, dummy_aug_vars = augment_variables(df, var_dict, url_dict, url_dict2, gitlink)
+
     df = fill_variables_bc(df, filled_dict, var_dict)
     for category in var_dict["categorical_vars_none"] + var_dict["categorical_vars_median"]:
         if category in cat_dict.keys():
@@ -290,7 +291,8 @@ def morph_zip(df, var_dict, gitlink = ''):
     if gitlink!='':
         zip_df = pd.read_csv(gitlink + "/zipcode_final.csv")
     else:
-        zip_df = pd.read_csv("zipcode_final.csv")
+        zip_df = pd.read_csv("zipcode_final.csv") #, usecols=["Postcode", "Bevolking", "Inkomen", "Gemiddelde_leeftijd"])
+    #zip_df.columns = ["zip_code", "population", "income", "avg_age"]
     zip_df["Postcode"] = zip_df["Postcode"].astype(int)
     zip_df["Total_income"] = zip_df["Bevolking"] * zip_df["Inkomen"]
 
@@ -321,6 +323,7 @@ def morph_zip(df, var_dict, gitlink = ''):
 
     df["mr_geo_zipcode"] = pd.to_numeric(df["mr_geo_zipcode"], errors='coerce')
     merged = df.merge(zip_df, left_on="mr_geo_zipcode", right_on="zip_code Postcode", how="left")  # zip_code zip_code as it has been transformed
+
     df = merged.drop(["mr_geo_zipcode", "zip_code Postcode"], axis=1)
     return [df, var_dict]
 
@@ -452,7 +455,7 @@ def url_keywords(frame, var_dict): #url has been formatted already
                 for keyword in volgende_woning_keywords:
                     if keyword in url:
                         volgende_woning_urls[c] += 1
-        if isinstance(indiv_urls, list):
+        if not isinstance(indiv_urls, float):
             for url in indiv_urls:
                 for keyword in starter_keywords:
                     if keyword in url:
